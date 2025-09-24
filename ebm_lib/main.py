@@ -26,13 +26,14 @@ class SimpleCNN(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Conv2d(32, 64, 4, 2, 1), # -> h/4, w/4
             nn.LeakyReLU(0.2),
+            # Use Adaptive Average Pooling to handle variable input sizes
+            nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(64 * (h // 4) * (w // 4), 1) # Output a single energy value
+            nn.Linear(64, 1) # Output a single energy value
         )
 
     def forward(self, x):
         # The output of the network is the scalar energy.
-        # Squeeze the last dimension to get a tensor of shape (batch_size,).
         return self.main(x).squeeze(-1)
 
 def run_example():

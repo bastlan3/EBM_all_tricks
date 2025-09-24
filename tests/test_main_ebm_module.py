@@ -57,3 +57,34 @@ def test_lightning_module_training_step(lightning_module_components):
     assert isinstance(loss, torch.Tensor)
     assert loss.dim() == 0 # Loss should be a scalar
     assert loss.requires_grad # Loss should have a grad_fn for backpropagation
+
+def test_multi_scale_energy_calculation(lightning_module_components):
+    """
+    Tests that the multi-scale energy calculation correctly sums the
+    energies from different scales.
+    """
+    # Use a mock EBM that always returns a constant energy of 1.0
+    class ConstantEnergyEBM(EBM):
+        def __init__(self):
+            super().__init__(nn.Identity())
+        def forward(self, x):
+            return torch.ones(x.shape[0], device=x.device)
+
+    # Replace the EBM in the components with our mock EBM
+    lightning_module_components['ebm_model'] = ConstantEnergyEBM()
+
+    # Initialize the module with 3 scales
+    module = EBMLightningModule(**lightning_module_components, num_scales=3)
+
+    # Use an image batch that can be downsampled multiple times
+    image_batch = torch.randn(4, 3, 32, 32)
+
+    # Calculate the multi-scale energy
+    total_energy = module._calculate_multi_scale_energy(image_batch)
+
+    # The mock EBM returns 1.0 for each scale. With 3 scales, the total
+    # energy for each sample should be 1.0 * 3 = 3.0.
+    expected_energy = torch.full((4,), 3.0)
+
+    assert total_energy.shape == (4,)
+    assert torch.allclose(total_energy, expected_energy)

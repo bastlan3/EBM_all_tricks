@@ -1,138 +1,176 @@
-# A Modular EBM Research Library
+# A Modular Research Library for Energy-Based Models
 
 This project provides an extensive, modular, and combinatorial Python library for training Energy-Based Models (EBMs). It is built on PyTorch and PyTorch Lightning to be scalable and support training on CPU, single GPU, multiple GPUs (DDP), and TPUs seamlessly.
 
-The core design principle is to allow researchers to easily mix and match training components (samplers, regularizers) to evaluate their combined effects.
-
-## Core Features
-
-- **Built on PyTorch Lightning**: Abstracts away boilerplate code for device management, distributed training, and mixed-precision, allowing you to focus on the EBM logic.
-- **Modular Components**:
-    - **Samplers**: A suite of MCMC samplers to generate negative samples.
-        - `LangevinSampler`
-        - `ReplayBufferLangevinSampler` (Improves mixing by re-using past samples)
-        - `MALASampler` (Metropolis-Adjusted Langevin Algorithm)
-        - `HMCSampler` (Hamiltonian Monte Carlo)
-        - `ParallelTemperingSampler` (Replica Exchange MCMC)
-    - **Regularizers**: A set of regularizers to stabilize training and improve model performance.
-        - `L2EnergyRegularizer`: Penalizes large energy values.
-        - `GradientPenaltyRegularizer`: Encourages the model to be 1-Lipschitz.
-        - `add_spectral_norm`: A utility function to apply spectral normalization to the EBM's network.
-- **Fully Tested**: The library includes a comprehensive test suite using `pytest` to ensure the correctness of each component.
+The core design principle is to allow researchers to easily mix and match training components (samplers, regularizers, and advanced objectives) to evaluate their combined effects.
 
 ## Installation
 
-To use the library and run the example, you need to install the required dependencies.
+First, ensure you have a recent version of PyTorch installed that matches your hardware (e.g., CUDA version). Then, install the library and its other dependencies:
 
 ```bash
-pip install torch pytorch-lightning pytest
+# Clone the repository
+git clone https://github.com/your-username/your-repo-name.git
+cd your-repo-name
+
+# Install dependencies
+pip install -e .
+pip install pytest # For running tests
 ```
 
-## Usage
+A `requirements.txt` file is also provided for reproducibility.
 
-The main entry point for training is the `EBMLightningModule`. You configure your EBM network, sampler, and regularizers as separate components and pass them to the Lightning module. The `pytorch_lightning.Trainer` then handles all the hardware-specific training loops.
+## Core Concepts
 
-Below is an example of how to set up and run an experiment.
+The library is built around a few key components:
 
-```python
-# main.py
-import torch
-import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
-import pytorch_lightning as pl
-
-# Import all the components from our library
-from ebm_lib.ebm import EBM
-from ebm_lib.lightning_module import EBMLightningModule
-from ebm_lib.samplers.langevin import ReplayBufferLangevinSampler
-from ebm_lib.regularizers.energy import L2EnergyRegularizer
-from ebm_lib.regularizers.gradient import GradientPenaltyRegularizer
-from ebm_lib.regularizers.spectral_norm import add_spectral_norm
-
-# 1. Define a simple EBM network
-class SimpleCNN(nn.Module):
-    # ... (network definition) ...
-
-# 2. Define the EBM network and model
-ebm_network = SimpleCNN(input_shape=(1, 32, 32))
-add_spectral_norm(ebm_network) # Optional
-ebm_model = EBM(ebm_network)
-
-# 3. Configure the SAMPLER
-sampler_config = {
-    'k_steps': 40,
-    'step_size': 1e-4,
-    'noise_scale': 0.005,
-    'buffer_size': 10000,
-    'replay_probability': 0.95
-}
-sampler = ReplayBufferLangevinSampler(sampler_config)
-
-# 4. Configure a LIST of REGULARIZERS
-regularizers = [
-    L2EnergyRegularizer(config={'lambda_e': 0.1}),
-    GradientPenaltyRegularizer(config={'lambda_gp': 1.0})
-]
-
-# 5. Configure Optimizer and instantiate the Lightning Module
-optimizer_config = {'name': 'Adam', 'lr': 1e-4}
-ebm_lightning_module = EBMLightningModule(
-    ebm_model=ebm_model,
-    sampler=sampler,
-    optimizer_config=optimizer_config,
-    regularizers=regularizers
-)
-
-# 6. Configure the PyTorch Lightning TRAINER
-# Run on 4 GPUs
-# trainer = pl.Trainer(accelerator='gpu', devices=4, strategy='ddp', max_epochs=100)
-# Run on CPU for debugging
-trainer = pl.Trainer(accelerator='cpu', max_epochs=1, limit_train_batches=10)
-
-# 7. Start training
-# (Create a dummy DataLoader 'data_loader' for the example)
-trainer.fit(model=ebm_lightning_module, train_dataloaders=data_loader)
-```
-
-## Running the Example
-
-An executable example script is provided at `ebm_lib/main.py`. To run it, navigate to the project's root directory and execute it as a module:
-
-```bash
-python3 -m ebm_lib.main
-```
-
-## Running Tests
-
-The project includes a full suite of unit tests. To run the tests, navigate to the project's root directory and run `pytest`:
-
-```bash
-pytest tests/
-```
+- **`EBM`**: A simple wrapper around a `torch.nn.Module` that defines the energy function.
+- **`Sampler`**: A base class for MCMC methods used to generate negative samples.
+- **`Regularizer`**: A base class for techniques that add a penalty to the loss function to stabilize training.
+- **`EBMLightningModule`**: The main `pytorch_lightning.LightningModule` that orchestrates standard contrastive divergence training.
 
 ---
 
-## Heuristic Pre-training
+## A Guide to EBM Training Techniques
 
-In addition to standard contrastive divergence training, this library provides a novel method for pre-training EBMs using a set of deterministic, heuristic-based "experts".
+This guide explains the theory and implementation of the various state-of-the-art EBM training techniques included in this library.
 
-### Concept
+### Category 1: The Core Objective (Contrastive Divergence)
 
-The core idea is to first train the EBM to approximate a "classic" understanding of image quality or noise. Instead of learning from data alone, the EBM learns to solve a regression task: its energy output for an image should match a score produced by a `MixtureOfExpertsScorer`. This scorer uses traditional signal processing methods (like Laplacian variance and FFT analysis) to evaluate image properties.
+Standard EBM training is performed with the `EBMLightningModule`. It uses a **short-run MCMC** sampler (like `LangevinSampler`) to generate negative samples and minimizes the **Contrastive Divergence (CD)** loss: `E(positive) - E(negative)`.
 
-This pre-training step can guide the EBM to learn a useful energy surface before being fine-tuned with more expensive MCMC-based methods.
+```python
+# Basic Usage (see ebm_lib/main.py for a full example)
+from ebm_lib.lightning_module import EBMLightningModule
 
-### Components
+# 1. Create your EBM, Sampler, and Regularizers
+ebm_model = ...
+sampler = ...
+regularizers = [...]
 
-- **`HeuristicExpert`**: Base class for any traditional image evaluation algorithm. Two are provided: `LaplacianVarianceExpert` and `HighFrequencyEnergyExpert`.
-- **`MixtureOfExpertsScorer`**: Combines the (normalized) scores from multiple experts into a single target value.
-- **`HeuristicPretrainingDataModule`**: A PyTorch Lightning DataModule that provides a stream of heavily augmented images (noise, blur, crops, etc.) to train on.
-- **`HeuristicPretrainer`**: A LightningModule that orchestrates the regression task.
+# 2. Initialize the Lightning Module
+ebm_lightning_module = EBMLightningModule(
+    ebm_model=ebm_model,
+    sampler=sampler,
+    regularizers=regularizers,
+    optimizer_config={'name': 'Adam', 'lr': 1e-4}
+)
 
-### Running the Pre-training Example
-
-An example script is provided at `ebm_lib/pretrain_main.py`. To run it, navigate to the project's root directory and execute it as a module:
-
-```bash
-python3 -m ebm_lib.pretrain_main
+# 3. Train with the PyTorch Lightning Trainer
+trainer = pl.Trainer(max_epochs=100)
+trainer.fit(model=ebm_lightning_module, train_dataloaders=...)
 ```
+
+### Category 2: Improving MCMC Sampling
+
+#### Technique: Persistent CD (Replay Buffer)
+- **Theory**: Instead of starting MCMC chains from random noise every time, we store the samples from the end of the last training step in a buffer and use them to initialize the chains for the next step. This is vastly more efficient.
+- **Implementation**: Use the `ReplayBufferLangevinSampler`. A small fraction of samples are periodically re-initialized from noise to prevent mode collapse, controlled by `replay_probability`.
+
+```python
+from ebm_lib.samplers.langevin import ReplayBufferLangevinSampler
+
+sampler_config = {
+    'k_steps': 40,
+    'buffer_size': 10000,
+    'replay_probability': 0.95 # 5% of chains are re-initialized from noise
+}
+sampler = ReplayBufferLangevinSampler(sampler_config)
+```
+
+#### Technique: Data Augmentation as an MCMC Move
+- **Theory**: Applying a data augmentation (e.g., a flip or rotation) inside the MCMC chain can be seen as a powerful "jump" proposal that helps the sampler explore different modes of the data distribution.
+- **Implementation**: Use the `AugmentedLangevinSampler` and pass it a `torchvision` transform.
+
+```python
+from ebm_lib.samplers.augmented_langevin import AugmentedLangevinSampler
+import torchvision.transforms.v2 as transforms
+
+# Define a transform to be used as an MCMC move
+mcmc_transform = transforms.RandomHorizontalFlip(p=1.0)
+
+sampler_config = {'k_steps': 20, 'augment_interval': 5}
+sampler = AugmentedLangevinSampler(sampler_config, transform=mcmc_transform)
+```
+
+### Category 3: Stabilization and Regularization
+
+#### Technique: Spectral Normalization
+- **Theory**: Constrains the Lipschitz constant of the EBM network by normalizing the weights of its layers. This is crucial for preventing the sampler from becoming unstable due to exploding gradients.
+- **Implementation**: Use the `add_spectral_norm` utility on your network *before* passing it to the `EBM` wrapper.
+
+```python
+from ebm_lib.regularizers.spectral_norm import add_spectral_norm
+
+ebm_network = SimpleCNN(...)
+add_spectral_norm(ebm_network) # Apply in-place
+ebm_model = EBM(ebm_network)
+```
+
+#### Technique: L2 Regularization on Energy
+- **Theory**: Adds a penalty proportional to `E(x)²` to the loss. This keeps the absolute energy values from drifting and causing numerical instability.
+- **Implementation**: Add the `L2EnergyRegularizer` to the list of regularizers.
+
+```python
+from ebm_lib.regularizers.energy import L2EnergyRegularizer
+regularizers = [L2EnergyRegularizer(config={'lambda_e': 0.1})]
+```
+
+#### Technique: Gradient Clipping
+- **Theory**: A last-resort safety measure to prevent outlier batches from causing destructively large gradient updates.
+- **Implementation**: This is a built-in feature of the `pytorch_lightning.Trainer`.
+
+```python
+# Clip the gradient norm to a maximum value of 1.0
+trainer = pl.Trainer(gradient_clip_val=1.0)
+```
+
+### Category 4: Advanced Architectures and Objectives
+
+#### Technique: Multi-Scale Energy Function
+- **Theory**: Defines the total energy as a sum of energies computed on multiple resolutions of the input image. This forces the network to learn features that are coherent across scales, improving global structure.
+- **Implementation**: Set `num_scales` when initializing the `EBMLightningModule`. Your EBM network must be able to handle variable-sized inputs (e.g., by using an `AdaptiveAvgPool2d` layer before the final linear layer).
+
+```python
+# The network in `ebm_model` must support variable input sizes
+module = EBMLightningModule(..., num_scales=3)
+```
+
+#### Technique: Corrected CD Objective (Du et al., 2021)
+- **Theory**: Corrects a known bias in the standard CD gradient by including two extra terms: one that backpropagates through the MCMC sampler and another that maximizes the sampler's entropy. This leads to a more stable and accurate approximation of the true maximum likelihood gradient.
+- **Implementation**: This advanced objective requires a new set of components.
+    1. A **differentiable sampler** (`DifferentiableLangevinSampler`).
+    2. An **entropy estimator** (`KnnEntropyEstimator`).
+    3. The **`CorrectedCDLightningModule`**, which combines everything.
+
+```python
+# See ebm_lib/corrected_cd/ for the full implementation
+from ebm_lib.corrected_cd.lightning_module import CorrectedCDLightningModule
+from ebm_lib.samplers.differentiable_langevin import DifferentiableLangevinSampler
+from ebm_lib.estimators.knn_entropy import KnnEntropyEstimator
+
+differentiable_sampler = DifferentiableLangevinSampler(...)
+knn_estimator = KnnEntropyEstimator(k=5)
+
+# Use the dedicated Lightning module for this objective
+corrected_cd_module = CorrectedCDLightningModule(
+    ebm_model=ebm_model,
+    sampler=differentiable_sampler,
+    knn_entropy_estimator=knn_estimator,
+    ...
+)
+```
+
+### Category 5: Pre-training with Heuristics
+
+This library also includes a novel pipeline for pre-training an EBM to predict a "common sense" noise score from a set of deterministic signal processing experts.
+
+- **See the `Heuristic Pre-training` section and the `ebm_lib/pretrain_main.py` script for details.**
+
+---
+
+## Running Examples and Tests
+
+- **Standard Training**: `python3 -m ebm_lib.main`
+- **Heuristic Pre-training**: `python3 -m ebm_lib.pretrain_main`
+- **Run All Tests**: `pytest`

@@ -1,6 +1,7 @@
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import List, Dict, Any
 
 from .ebm import EBM
@@ -16,7 +17,8 @@ class EBMLightningModule(pl.LightningModule):
                  ebm_model: EBM,
                  sampler: Sampler,
                  optimizer_config: Dict[str, Any],
-                 regularizers: List[Regularizer] = None):
+                 regularizers: List[Regularizer] = None,
+                 num_scales: int = 1):
         """
         Args:
             ebm_model (EBM): The energy-based model.
@@ -29,10 +31,29 @@ class EBMLightningModule(pl.LightningModule):
         self.sampler = sampler
         self.optimizer_config = optimizer_config
         self.regularizers = nn.ModuleList(regularizers if regularizers is not None else [])
+        self.num_scales = num_scales
 
         # This is important for PyTorch Lightning to track your model's parameters
         # and other hyperparameters, making saving and loading checkpoints robust.
         self.save_hyperparameters(ignore=['ebm_model', 'sampler', 'regularizers'])
+
+    def _calculate_multi_scale_energy(self, samples: torch.Tensor) -> torch.Tensor:
+        """
+        Calculates the total energy of a batch of samples by summing the
+        energies over multiple resolutions of the samples.
+        """
+        total_energy = torch.zeros(samples.shape[0], device=samples.device)
+
+        for scale in range(self.num_scales):
+            if scale > 0:
+                # Downsample by a factor of 2 for each new scale
+                samples = F.avg_pool2d(samples, kernel_size=2)
+
+            # The EBM network must be able to handle variable input sizes
+            # if num_scales > 1. This is typically achieved with adaptive pooling.
+            total_energy += self.ebm_model(samples).squeeze()
+
+        return total_energy
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         """
@@ -63,8 +84,8 @@ class EBMLightningModule(pl.LightningModule):
         )
 
         # 3. Calculate the core Contrastive Divergence (CD) loss
-        positive_energy = self.ebm_model(positive_samples)
-        negative_energy = self.ebm_model(negative_samples)
+        positive_energy = self._calculate_multi_scale_energy(positive_samples)
+        negative_energy = self._calculate_multi_scale_energy(negative_samples)
 
         cd_loss = positive_energy.mean() - negative_energy.mean()
         self.log('train_loss/cd_loss', cd_loss, on_step=True, on_epoch=True, prog_bar=True)
