@@ -1,0 +1,40 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+pip-wheel-metadata/
+
+# Environment folders
+.env
+.venv
+env/
+venv/
+
+# Build and distribution
+build/
+dist/
+develop-eggs/
+eggs/
+sdist/
+wheels/
+*.egg
+
+# Data folders
+data/
+test_data/
+
+# IDE configuration files
+.vscode/
+.idea/
+
+# Log files
+*.log
+logs/
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
