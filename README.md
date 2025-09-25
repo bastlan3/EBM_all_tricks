@@ -116,6 +116,18 @@ from ebm_lib.regularizers.energy import L2EnergyRegularizer
 regularizers = [L2EnergyRegularizer(config={'lambda_e': 0.1})]
 ```
 
+#### Technique: Denoising Score Matching (DSM) as a Regularizer
+- **Theory**: DSM provides a way to learn the data distribution without MCMC. It perturbs data points `x` with Gaussian noise to get `x̃` and trains the model's score (`-∇E(x)`) to match the true score of the perturbed data distribution, which is analytically known. When used as a regularizer alongside CD, it helps to shape the local energy landscape around data points.
+- **Implementation**: Add the `DenoisingScoreMatchingRegularizer` to the list of regularizers.
+
+```python
+from ebm_lib.regularizers.score_matching import DenoisingScoreMatchingRegularizer
+regularizers = [
+    L2EnergyRegularizer(config={'lambda_e': 0.1}),
+    DenoisingScoreMatchingRegularizer(config={'lambda_dsm': 1.0, 'sigma': 0.1})
+]
+```
+
 #### Technique: Gradient Clipping
 - **Theory**: A last-resort safety measure to prevent outlier batches from causing destructively large gradient updates.
 - **Implementation**: This is a built-in feature of the `pytorch_lightning.Trainer`.
