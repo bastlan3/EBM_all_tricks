@@ -119,3 +119,38 @@ class ParallelTemperingSampler(Sampler):
 
         # Return samples from the coldest chain (beta=1)
         return self.chains_state[0].detach()
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "n_chains": {
+                "description": "Number of parallel chains (temperatures) to run.",
+                "recommended": "8-16",
+                "type": "int"
+            },
+            "betas": {
+                "description": "Tuple of inverse temperatures. If None, a linear schedule is used.",
+                "recommended": "None (to use the default linear schedule) or a geometric schedule.",
+                "type": "Tuple[float] or None"
+            },
+            "swap_interval": {
+                "description": "Number of MCMC steps between swap proposals.",
+                "recommended": "5-10",
+                "type": "int"
+            },
+            "k_steps": {
+                "description": "Number of internal Langevin steps per sample() call.",
+                "recommended": "10-20",
+                "type": "int"
+            },
+            "step_size": {
+                "description": "Step size for the internal Langevin sampler.",
+                "recommended": "1e-4 to 1e-5",
+                "type": "float"
+            },
+            "noise_scale": {
+                "description": "Noise scale for the internal Langevin sampler.",
+                "recommended": "0.005",
+                "type": "float"
+            }
+        }

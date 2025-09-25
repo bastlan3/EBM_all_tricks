@@ -31,3 +31,11 @@ class Regularizer(nn.Module, ABC):
             torch.Tensor: The scalar regularization loss.
         """
         pass
+
+    @staticmethod
+    @abstractmethod
+    def get_hyperparameter_info() -> dict:
+        """
+        Returns a dictionary describing the hyperparameters for this regularizer.
+        """
+        pass

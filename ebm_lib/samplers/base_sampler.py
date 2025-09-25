@@ -30,3 +30,11 @@ class Sampler(ABC):
             torch.Tensor: A tensor of generated samples.
         """
         pass
+
+    @staticmethod
+    @abstractmethod
+    def get_hyperparameter_info() -> dict:
+        """
+        Returns a dictionary describing the hyperparameters for this sampler.
+        """
+        pass

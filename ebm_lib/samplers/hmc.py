@@ -108,3 +108,18 @@ class HMCSampler(Sampler):
         final_samples = torch.where(accept_mask, q, current_q)
 
         return final_samples.detach()
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "n_leapfrog_steps": {
+                "description": "Number of leapfrog steps to simulate Hamiltonian dynamics.",
+                "recommended": "10-20. More steps allow for more distant proposals.",
+                "type": "int"
+            },
+            "step_size": {
+                "description": "Step size (epsilon) for the leapfrog integrator.",
+                "recommended": "Highly sensitive. Requires tuning. Start small, e.g., 0.05-0.1.",
+                "type": "float"
+            }
+        }

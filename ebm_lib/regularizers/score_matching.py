@@ -74,3 +74,18 @@ class DenoisingScoreMatchingRegularizer(Regularizer):
         loss = 0.5 * ((model_score - true_score.detach())**2).view(model_score.shape[0], -1).sum(dim=1).mean()
 
         return self.lambda_dsm * loss
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "lambda_dsm": {
+                "description": "Weight of the Denoising Score Matching loss.",
+                "recommended": "1.0 is a common starting point.",
+                "type": "float"
+            },
+            "sigma": {
+                "description": "Standard deviation of the Gaussian noise added to the data.",
+                "recommended": "0.01 to 0.1",
+                "type": "float"
+            }
+        }

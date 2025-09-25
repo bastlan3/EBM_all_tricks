@@ -69,3 +69,15 @@ class AugmentedLangevinSampler(LangevinSampler):
 
         new_samples = samples.detach() - self.step_size * grad + self.noise_scale * torch.randn_like(samples)
         return new_samples.detach()
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        info = super(AugmentedLangevinSampler, AugmentedLangevinSampler).get_hyperparameter_info()
+        info.update({
+            "augment_interval": {
+                "description": "Number of MCMC steps between applying the augmentation transform.",
+                "recommended": "5-10",
+                "type": "int"
+            }
+        })
+        return info

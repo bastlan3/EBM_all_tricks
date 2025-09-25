@@ -71,6 +71,26 @@ class LangevinSampler(Sampler):
         # Return the final samples, detached from the computation graph
         return samples.detach()
 
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "k_steps": {
+                "description": "Number of MCMC steps to run.",
+                "recommended": "20-60 for training, can be higher for sampling.",
+                "type": "int"
+            },
+            "step_size": {
+                "description": "Step size (learning rate) for the Langevin dynamics update.",
+                "recommended": "Varies greatly. Start with 1e-4 to 1e-5.",
+                "type": "float"
+            },
+            "noise_scale": {
+                "description": "Scale of the Gaussian noise added at each step.",
+                "recommended": "Typically small, e.g., 0.005 to 0.01.",
+                "type": "float"
+            }
+        }
+
 
 class ReplayBufferLangevinSampler(LangevinSampler):
     """
@@ -154,6 +174,25 @@ class ReplayBufferLangevinSampler(LangevinSampler):
 
         return final_samples
 
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        # Start with the parent's hyperparameters
+        info = super(ReplayBufferLangevinSampler, ReplayBufferLangevinSampler).get_hyperparameter_info()
+        # Add the new ones
+        info.update({
+            "buffer_size": {
+                "description": "Maximum number of samples to store in the replay buffer.",
+                "recommended": "10000",
+                "type": "int"
+            },
+            "replay_probability": {
+                "description": "Probability of re-initializing a chain from the buffer vs. from noise.",
+                "recommended": "0.95 (i.e., 5% refresh rate from noise)",
+                "type": "float"
+            }
+        })
+        return info
+
 
 class MALASampler(Sampler):
     """
@@ -225,3 +264,24 @@ class MALASampler(Sampler):
             # --- End MALA Step ---
 
         return samples.detach()
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        # MALA shares the same core hyperparameters as Langevin
+        return {
+            "k_steps": {
+                "description": "Number of MCMC steps to run.",
+                "recommended": "20-60 for training, can be higher for sampling.",
+                "type": "int"
+            },
+            "step_size": {
+                "description": "Step size (learning rate) for the Langevin proposal.",
+                "recommended": "Varies greatly. Start with 1e-4 to 1e-5.",
+                "type": "float"
+            },
+            "noise_scale": {
+                "description": "Scale of the Gaussian noise for the Langevin proposal.",
+                "recommended": "Typically small, e.g., 0.005 to 0.01.",
+                "type": "float"
+            }
+        }

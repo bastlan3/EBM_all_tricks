@@ -46,3 +46,23 @@ class DifferentiableLangevinSampler(LangevinSampler):
         # Do NOT detach the final samples. The calling module will be responsible
         # for deciding when to detach.
         return samples
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "k_steps": {
+                "description": "Number of MCMC steps to run. Gradients will flow back through all steps.",
+                "recommended": "5-20. Fewer steps are common due to computational cost.",
+                "type": "int"
+            },
+            "step_size": {
+                "description": "Step size for the Langevin dynamics update.",
+                "recommended": "Varies greatly. Start with 1e-4 to 1e-5.",
+                "type": "float"
+            },
+            "noise_scale": {
+                "description": "Scale of the Gaussian noise added at each step.",
+                "recommended": "Typically small, e.g., 0.005 to 0.01.",
+                "type": "float"
+            }
+        }

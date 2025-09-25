@@ -43,3 +43,13 @@ class L2EnergyRegularizer(Regularizer):
         l2_penalty = (positive_energy**2).mean() + (negative_energy**2).mean()
 
         return self.lambda_e * l2_penalty
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "lambda_e": {
+                "description": "Weight of the L2 energy penalty.",
+                "recommended": "0.1 to 1.0",
+                "type": "float"
+            }
+        }

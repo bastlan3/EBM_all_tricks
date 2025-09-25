@@ -67,3 +67,18 @@ class GradientPenaltyRegularizer(Regularizer):
         penalty = ((grad_norm - self.target)**2).mean()
 
         return self.lambda_gp * penalty
+
+    @staticmethod
+    def get_hyperparameter_info() -> dict:
+        return {
+            "lambda_gp": {
+                "description": "Weight of the gradient penalty.",
+                "recommended": "1.0 to 10.0",
+                "type": "float"
+            },
+            "target": {
+                "description": "The target value for the gradient norm.",
+                "recommended": "1.0",
+                "type": "float"
+            }
+        }
