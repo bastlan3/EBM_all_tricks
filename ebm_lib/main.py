@@ -12,6 +12,7 @@ from .samplers.langevin import ReplayBufferLangevinSampler
 from .regularizers.energy import L2EnergyRegularizer
 from .regularizers.gradient import GradientPenaltyRegularizer
 from .regularizers.spectral_norm import add_spectral_norm
+from torchvision.models import resnet18
 
 # 1. Define a simple EBM network (e.g., a small CNN for image data)
 class SimpleCNN(nn.Module):
@@ -36,6 +37,47 @@ class SimpleCNN(nn.Module):
         # The output of the network is the scalar energy.
         return self.main(x).squeeze(-1)
 
+class ResNet18EBM(nn.Module):
+    """A ResNet18-based EBM with modified output layer for energy function."""
+    def __init__(self, input_shape, pretrained=True):
+        super().__init__()
+        # Load pretrained ResNet18
+        self.backbone = resnet18(pretrained=pretrained)
+        # Handle input shape compatibility with ResNet18 (expects 3-channel input)
+        c, h, w = input_shape
+        if c != 3:
+            self.input_adapter = nn.Conv2d(c, 3, kernel_size=1, stride=1, padding=0)
+        else:
+            self.input_adapter = nn.Identity()
+
+        # Resize to minimum ResNet input size (224x224) if needed
+        if h < 224 or w < 224:
+            self.resize = nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False)
+        else:
+            self.resize = nn.Identity()
+        # Remove the final classification layer
+        self.backbone.fc = nn.Identity()
+        
+        # Add custom layers for energy function
+        self.energy_head = nn.Sequential(
+            nn.Linear(512, 256),  # ResNet18 outputs 512 features
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.3),
+            nn.Linear(256, 64),
+            nn.LeakyReLU(0.2),
+            nn.Linear(64, 1)  # Output single energy value
+        )
+    
+    def forward(self, x):
+        # Apply input adapter and resize if necessary
+        x = self.input_adapter(x)
+        x = self.resize(x)
+        # Extract features using ResNet18 backbone
+        features = self.backbone(x)
+        # Compute energy
+        energy = self.energy_head(features)
+        return energy.squeeze(-1)
+    
 def run_example():
     """
     An example script demonstrating how to configure and run EBM training.

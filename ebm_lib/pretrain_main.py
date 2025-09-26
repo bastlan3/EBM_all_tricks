@@ -3,7 +3,7 @@ import pytorch_lightning as pl
 
 # Import components from our library
 from ebm_lib.ebm import EBM
-from ebm_lib.main import SimpleCNN # Reuse the CNN from the main example
+from ebm_lib.main import SimpleCNN, ResNet18EBM# Reuse the CNN from the main example
 from ebm_lib.heuristics.experts import LaplacianVarianceExpert, HighFrequencyEnergyExpert
 from ebm_lib.heuristics.scorer import MixtureOfExpertsScorer
 from ebm_lib.pretraining.data import HeuristicPretrainingDataModule
@@ -22,7 +22,7 @@ def run_pretraining_example():
 
     # --- 2. Set up the EBM ---
     print("Initializing EBM...")
-    ebm_network = SimpleCNN(input_shape=(3, 32, 32)) # CIFAR10 has 3 channels
+    ebm_network = ResNet18EBM(input_shape=(3, 32, 32)) # CIFAR10 has 3 channels
     ebm_model = EBM(ebm_network)
 
     # --- 3. Set up the Heuristic Scorer ---
@@ -49,10 +49,10 @@ def run_pretraining_example():
     print("Configuring PyTorch Lightning Trainer...")
     trainer = pl.Trainer(
         accelerator='auto',
-        max_epochs=1,
+        max_epochs=10,
         # Limit steps for a quick demonstration run
-        limit_train_batches=20,
-        enable_checkpointing=False,
+        limit_train_batches=2000,
+        enable_checkpointing=True,
         logger=False,
         enable_progress_bar=True
     )
