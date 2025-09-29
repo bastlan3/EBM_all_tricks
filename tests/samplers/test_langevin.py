@@ -180,3 +180,61 @@ def test_mala_acceptance_logic(mala_sampler_config):
 
     # The norm of the final samples should be smaller, as they have moved towards x=0
     assert torch.norm(final_samples) < torch.norm(initial_samples)
+
+def test_langevin_sampler_with_noise_generator(ebm_model, sampler_config):
+    """
+    Tests that the Langevin sampler can use a custom noise generator for
+    initializing the MCMC chains.
+    """
+    from ebm_lib.noise import NoiseGenerator
+
+    n_samples = 4
+    sample_shape = (1, 8, 8)
+
+    # Create a noise generator
+    noise_gen = NoiseGenerator(size=(8, 8), batch_size=n_samples, device=ebm_model.device)
+
+    # Create two samplers: one with the generator, one without
+    sampler_with_gen = LangevinSampler(sampler_config, noise_generator=noise_gen)
+    sampler_without_gen = LangevinSampler(sampler_config)
+
+    # Run both for 0 steps to get the initial samples
+    sampler_with_gen.k_steps = 0
+    sampler_without_gen.k_steps = 0
+
+    # Generate initial samples
+    # The sampler with the generator should produce brown noise by default
+    initial_samples_gen = sampler_with_gen.sample(ebm_model, n_samples, sample_shape)
+    # The other sampler should produce uniform noise
+    initial_samples_uniform = sampler_without_gen.sample(ebm_model, n_samples, sample_shape)
+
+    # The two sets of initial samples should be different
+    assert not torch.allclose(initial_samples_gen, initial_samples_uniform)
+
+def test_sampler_with_noise_curriculum(ebm_model, sampler_config):
+    """
+    Tests that the sampler generates different initial noise based on the
+    training progress when using a noise generator.
+    """
+    from ebm_lib.noise import NoiseGenerator
+
+    n_samples = 4
+    sample_shape = (1, 8, 8)
+    noise_gen = NoiseGenerator(size=(8, 8), batch_size=n_samples, device=ebm_model.device)
+    sampler = LangevinSampler(sampler_config, noise_generator=noise_gen)
+    sampler.k_steps = 0 # We only want to inspect the initial samples
+
+    # Noise at the beginning of training (progress=0.0) should be brown
+    brown_noise = sampler.sample(ebm_model, n_samples, sample_shape, progress=0.0)
+
+    # Noise at the end of training (progress=1.0) should be white
+    white_noise = sampler.sample(ebm_model, n_samples, sample_shape, progress=1.0)
+
+    # The two noise types should be statistically different
+    assert not torch.allclose(brown_noise, white_noise)
+
+    # A simple check: brown noise has more low-frequency components, so it should
+    # be smoother and have a smaller variance of its pixel-wise difference.
+    brown_diff_var = torch.var(torch.diff(brown_noise))
+    white_diff_var = torch.var(torch.diff(white_noise))
+    assert brown_diff_var < white_diff_var

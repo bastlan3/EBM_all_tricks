@@ -41,16 +41,18 @@ class HeuristicPretrainingDataModule(pl.LightningDataModule):
     It downloads a base dataset (CIFAR10) and applies a strong augmentation
     pipeline to generate varied images for noise/quality scoring.
     """
-    def __init__(self, data_dir: str = './data', batch_size: int = 32, num_workers: int = 4):
+    def __init__(self, data_dir: str = './data', batch_size: int = 32, num_workers: int = 4, image_size: int = 32):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.image_size = image_size
 
         # Define a strong augmentation pipeline using albumentations
         self.transform = A.Compose([
+            A.Resize(height=self.image_size, width=self.image_size, p=1.0),
             # Geometric transformations
-            A.RandomResizedCrop(size=(32, 32), scale=(0.5, 1.0), p=0.5),
+            A.RandomCrop(height=self.image_size, width=self.image_size, p=0.5),
             A.HorizontalFlip(p=0.5),
             # Blur transformations
             A.OneOf([

@@ -5,164 +5,191 @@ import pytorch_lightning as pl
 import sys
 import os
 
-# Use relative imports, as this script is part of the ebm_lib package
-from .ebm import EBM
-from .lightning_module import EBMLightningModule
-from .samplers.langevin import ReplayBufferLangevinSampler
-from .regularizers.energy import L2EnergyRegularizer
-from .regularizers.gradient import GradientPenaltyRegularizer
-from .regularizers.spectral_norm import add_spectral_norm
-from torchvision.models import resnet18
+# Import components from our library
+from ebm_lib.ebm import EBM
+from ebm_lib.lightning_module import EBMLightningModule
+from ebm_lib.samplers.langevin import ReplayBufferLangevinSampler
+from ebm_lib.regularizers.energy import L2EnergyRegularizer
+from ebm_lib.regularizers.gradient import GradientPenaltyRegularizer
+from ebm_lib.regularizers.score_matching import DenoisingScoreMatchingRegularizer
+from ebm_lib.regularizers.spectral_norm import add_spectral_norm
+from ebm_lib.pretraining.data import HeuristicPretrainingDataModule
+from ebm_lib.pretraining.lightning_module import HeuristicPretrainer
+from ebm_lib.heuristics.experts import LaplacianVarianceExpert, HighFrequencyEnergyExpert
+from ebm_lib.heuristics.scorer import MixtureOfExpertsScorer
 
-# 1. Define a simple EBM network (e.g., a small CNN for image data)
 class SimpleCNN(nn.Module):
-    """A small CNN to be used as the energy function."""
+    """A small CNN that can handle variable input sizes due to AdaptiveAvgPool2d."""
     def __init__(self, input_shape):
         super().__init__()
         c, h, w = input_shape
         self.main = nn.Sequential(
             nn.Conv2d(c, 16, 3, 1, 1),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 32, 4, 2, 1), # -> h/2, w/2
+            nn.Conv2d(16, 32, 4, 2, 1),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 64, 4, 2, 1), # -> h/4, w/4
+            nn.Conv2d(32, 64, 4, 2, 1),
             nn.LeakyReLU(0.2),
-            # Use Adaptive Average Pooling to handle variable input sizes
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(64, 1) # Output a single energy value
+            nn.Linear(64, 1)
         )
 
     def forward(self, x):
-        # The output of the network is the scalar energy.
         return self.main(x).squeeze(-1)
 
-class ResNet18EBM(nn.Module):
-    """A ResNet18-based EBM with modified output layer for energy function."""
-    def __init__(self, input_shape, pretrained=True):
-        super().__init__()
-        # Load pretrained ResNet18
-        self.backbone = resnet18(pretrained=pretrained)
-        # Handle input shape compatibility with ResNet18 (expects 3-channel input)
-        c, h, w = input_shape
-        if c != 3:
-            self.input_adapter = nn.Conv2d(c, 3, kernel_size=1, stride=1, padding=0)
-        else:
-            self.input_adapter = nn.Identity()
-
-        # Resize to minimum ResNet input size (224x224) if needed
-        if h < 224 or w < 224:
-            self.resize = nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False)
-        else:
-            self.resize = nn.Identity()
-        # Remove the final classification layer
-        self.backbone.fc = nn.Identity()
-        
-        # Add custom layers for energy function
-        self.energy_head = nn.Sequential(
-            nn.Linear(512, 256),  # ResNet18 outputs 512 features
-            nn.LeakyReLU(0.2),
-            nn.Dropout(0.3),
-            nn.Linear(256, 64),
-            nn.LeakyReLU(0.2),
-            nn.Linear(64, 1)  # Output single energy value
-        )
-    
-    def forward(self, x):
-        # Apply input adapter and resize if necessary
-        x = self.input_adapter(x)
-        x = self.resize(x)
-        # Extract features using ResNet18 backbone
-        features = self.backbone(x)
-        # Compute energy
-        energy = self.energy_head(features)
-        return energy.squeeze(-1)
-    
-def run_example():
+def run_workflow(ckpt_path=None):
     """
-    An example script demonstrating how to configure and run EBM training.
+    Demonstrates a full, two-stage workflow:
+    1. Heuristic pre-training to initialize the EBM.
+    2. Contrastive Divergence fine-tuning.
     """
-    print("--- Starting EBM Training Library Example ---")
+    print("--- Starting Full EBM Training Workflow ---")
 
-    # --- Configuration ---
-    image_shape = (1, 32, 32)
-    batch_size = 32
-
-    # --- 1. Create a dummy dataset ---
-    # Create 10 batches of random data to simulate a small dataset.
-    print("Creating dummy dataset...")
-    dummy_data = torch.randn(batch_size * 10, *image_shape)
-    dataset = TensorDataset(dummy_data)
-    # Set num_workers based on platform for compatibility
-    num_workers = 4 if sys.platform != 'win32' else 0
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-
-    # --- 2. Define the EBM network and model ---
-    print("Initializing model components...")
-    # The user is responsible for creating the network architecture.
-    ebm_network = SimpleCNN(input_shape=image_shape)
-
-    # (Optional) Apply spectral norm for training stability.
-    add_spectral_norm(ebm_network)
-
-    # Wrap the network in our EBM class.
-    # PyTorch Lightning will handle moving this to the correct device.
-    ebm_model = EBM(ebm_network)
-
-    # --- 3. Configure and select the SAMPLER ---
-    sampler_config = {
-        'k_steps': 40,
-        'step_size': 1e-4,
-        'noise_scale': 0.005,
-        'buffer_size': 10000,
-        'replay_probability': 0.95
-    }
-    sampler = ReplayBufferLangevinSampler(sampler_config)
-
-    # --- 4. Configure and select a LIST of REGULARIZERS ---
-    regularizers_config = {
-        'l2_energy': {'lambda_e': 0.1},
-        'grad_penalty': {'lambda_gp': 1.0}
-    }
-    regularizers = [
-        L2EnergyRegularizer(regularizers_config['l2_energy']),
-        GradientPenaltyRegularizer(regularizers_config['grad_penalty'])
-    ]
-
-    # --- 5. Configure Optimizer and instantiate the Lightning Module ---
+    # --- Shared Configuration ---
+    image_shape = (3, 32, 32) # CIFAR10
     optimizer_config = {'name': 'Adam', 'lr': 1e-4}
 
-    ebm_lightning_module = EBMLightningModule(
+    # --- Initialize Shared Components ---
+    # Create two separate network instances for the online and target models
+    online_network = SimpleCNN(input_shape=image_shape)
+    add_spectral_norm(online_network)
+    ebm_model = EBM(online_network)
+
+    target_network = SimpleCNN(input_shape=image_shape)
+    add_spectral_norm(target_network)
+    target_ebm_model = EBM(target_network)
+
+    # Initialize target model weights to be the same as the online model
+    target_ebm_model.load_state_dict(ebm_model.state_dict())
+
+    # --- Stage 1: Heuristic Pre-training ---
+    print("\n--- STAGE 1: Heuristic Pre-training ---")
+
+    # 1a. Set up the Data Pipeline for pre-training
+    pretrain_data_module = HeuristicPretrainingDataModule(batch_size=128)
+
+    # 1b. Set up the Heuristic Scorer
+    experts = [LaplacianVarianceExpert(), HighFrequencyEnergyExpert()]
+    heuristic_scorer = MixtureOfExpertsScorer(experts=experts)
+
+    # 1c. Set up the Pre-training Lightning Module
+    pretrainer_module = HeuristicPretrainer(
         ebm_model=ebm_model,
-        sampler=sampler,
-        optimizer_config=optimizer_config,
-        regularizers=regularizers
+        heuristic_scorer=heuristic_scorer,
+        optimizer_config=optimizer_config
     )
 
-    # --- 6. Configure the PyTorch Lightning TRAINER ---
-    # This is the only part that needs to change for different hardware.
-    # We'll run on CPU for a few steps for this example.
-    print("Configuring PyTorch Lightning Trainer...")
-    trainer = pl.Trainer(
-        accelerator='auto', # Automatically selects CPU, GPU, or other accelerator
-        max_epochs=1,
-        # Limit steps for a quick demonstration
-        limit_train_batches=10,
+    # 1d. Configure and run the pre-training Trainer
+    pretrain_trainer = pl.Trainer(
+        accelerator='auto',
+        max_epochs=2,
+        limit_train_batches=50, # Limit for a quick demonstration
         enable_checkpointing=False,
-        logger=False, # Disable logging for this simple example
+        logger=False,
+        enable_progress_bar=True
+    )
+    pretrain_trainer.fit(model=pretrainer_module, datamodule=pretrain_data_module)
+    print("--- Heuristic Pre-training Finished ---")
+
+    # --- Stage 2: Contrastive Divergence Fine-tuning ---
+    print("\n--- STAGE 2: Contrastive Divergence Fine-tuning ---")
+
+    # The `ebm_model` object has now been pre-trained. We can use it directly.
+
+    # 2a. Set up the Sampler for CD training
+    sampler = ReplayBufferLangevinSampler(config={'buffer_size': 10000})
+
+    # 2b. Set up Regularizers
+    regularizers = [
+        L2EnergyRegularizer(config={'lambda_e': 0.01}),
+        DenoisingScoreMatchingRegularizer(config={'lambda_dsm': 0.1, 'sigma': 0.01})
+    ]
+
+    # 2c. Set up the main EBM Lightning Module
+    finetune_module = EBMLightningModule(
+        ebm_model=ebm_model,
+        target_ebm_model=target_ebm_model,
+        sampler=sampler,
+        optimizer_config=optimizer_config,
+        regularizers=regularizers,
+        ema_decay=0.999 # Use EMA for stable fine-tuning
+    )
+
+    # 2d. Configure and run the fine-tuning Trainer
+    finetune_trainer = pl.Trainer(
+        accelerator='auto',
+        max_epochs=2,
+        limit_train_batches=50,
+        enable_checkpointing=True, # Enable checkpoints for the final model
+        default_root_dir="ebm_checkpoints",
+        logger=False,
         enable_progress_bar=True
     )
 
-    print("\n--- Starting Training ---")
-    # --- 7. Start training! ---
-    trainer.fit(model=ebm_lightning_module, train_dataloaders=data_loader)
-    print("--- Training Finished ---")
+    # Use the same data module, but the LightningModule will now use the samples
+    # for CD training instead of heuristic regression.
+    finetune_trainer.fit(model=finetune_module, datamodule=pretrain_data_module, ckpt_path=ckpt_path)
+    print("--- CD Fine-tuning Finished ---")
 
 if __name__ == '__main__':
-    # Add a check for CUDA availability
-    if torch.cuda.is_available():
-        print(f"CUDA is available. Found {torch.cuda.device_count()} GPU(s).")
-    else:
-        print("CUDA not available. Running on CPU.")
+    import argparse
+    parser = argparse.ArgumentParser(description="Run the EBM training workflow.")
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=None,
+        help="Path to a checkpoint file to resume fine-tuning from."
+    )
+    args = parser.parse_args()
 
-    run_example()
+    run_workflow(ckpt_path=args.ckpt_path)
+
+    # --- Example for Latent Space EBM Training (Commented Out) ---
+    # This shows how you would set up the latent space training using a
+    # powerful, pre-trained VAE from Stable Diffusion.
+    """
+    from diffusers import AutoencoderKL
+    from ebm_lib.models.latent_ebm import LatentEBM
+    from ebm_lib.latent_ebm_module import LatentEBMLightningModule
+
+    # 1. Load the pre-trained Stable Diffusion VAE
+    # This will download the model from the Hugging Face Hub on first run.
+    print("Loading pre-trained Stable Diffusion VAE...")
+    vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-2-1-base", subfolder="vae")
+
+    # The VAE's encode method returns a distribution. We need a simple encoder
+    # that returns the mean of that distribution as a latent vector.
+    class VAEEncoderWrapper(nn.Module):
+        def __init__(self, vae):
+            super().__init__()
+            self.vae = vae
+
+        def encode(self, x):
+            # The VAE returns a distribution object, we take the mean for a deterministic latent vector
+            return self.vae.encode(x).latent_dist.mean
+
+    encoder = VAEEncoderWrapper(vae)
+
+    # 2. Define an EBM that operates on the latent space
+    # The latent space of this VAE is 4 channels, H/8, W/8
+    latent_dim = 4 * (image_shape[1] // 8) * (image_shape[2] // 8)
+    latent_energy_net = nn.Sequential(nn.Linear(latent_dim, 256), nn.ReLU(), nn.Linear(256, 1))
+
+    # 3. Create the LatentEBM wrapper
+    latent_ebm = LatentEBM(latent_energy_net, encoder)
+
+    # 4. Use the LatentEBMLightningModule for training
+    # The sampler will now operate on the latent space
+    latent_sampler = LangevinSampler(config={'k_steps': 20})
+    latent_module = LatentEBMLightningModule(
+        ebm_model=latent_ebm,
+        sampler=latent_sampler,
+        optimizer_config={'name': 'Adam', 'lr': 1e-4}
+    )
+
+    # 5. Train on a standard image dataloader, resizing to the VAE's expected input size
+    data_module = HeuristicPretrainingDataModule(batch_size=32, image_size=256)
+    trainer = pl.Trainer(max_epochs=50)
+    trainer.fit(model=latent_module, datamodule=data_module)
+    """

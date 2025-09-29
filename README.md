@@ -183,6 +183,78 @@ This library also includes a novel pipeline for pre-training an EBM to predict a
 
 ## Running Examples and Tests
 
-- **Standard Training**: `python3 -m ebm_lib.main`
-- **Heuristic Pre-training**: `python3 -m ebm_lib.pretrain_main`
+- **Run Full Workflow**: `python3 -m ebm_lib.main`
 - **Run All Tests**: `pytest`
+
+---
+
+## A Deeper Dive: Advanced Techniques
+
+### Optional EMA Target Network for Stability
+
+- **Theory**: For very deep or unstable models, the MCMC sampler can be sensitive to rapid changes in the EBM's energy surface. Using a "target network"—a slow, Exponential Moving Average (EMA) of the online model's weights—for sampling provides a more stable energy landscape for the sampler to explore.
+- **Implementation**: To use this feature, simply instantiate a second EBM model and pass it as the `target_ebm_model` to the `EBMLightningModule`. The module will handle the EMA updates automatically. If it is not provided, the standard online model is used for sampling.
+
+```python
+online_model = EBM(...)
+target_model = EBM(deepcopy(online_model.network))
+target_model.load_state_dict(online_model.state_dict())
+
+module = EBMLightningModule(
+    ebm_model=online_model,
+    target_ebm_model=target_model,
+    ema_decay=0.999,
+    ...
+)
+```
+
+### Training on a Latent Space (with Stable Diffusion VAE)
+
+- **Theory**: Instead of learning an energy function over high-dimensional pixel space, it is often more effective to learn an energy function over a lower-dimensional latent space provided by a powerful, pre-trained autoencoder. This allows the EBM to focus on the semantic structure of the data, while the autoencoder handles the low-level pixel details.
+- **Implementation**: This library supports using any frozen encoder that has an `.encode()` method. The recommended approach is to use the pre-trained Variational Autoencoder (VAE) from a model like Stable Diffusion.
+
+    1.  **Load a Pre-trained VAE**: Use the `diffusers` library to load a VAE from the Hugging Face Hub.
+    2.  **Wrap the VAE**: Create a simple wrapper so that the `.encode()` method returns a deterministic latent vector (the mean of the VAE's output distribution).
+    3.  **Define a Latent-Space EBM**: Create an EBM network (e.g., a simple MLP) that takes the latent vector as input.
+    4.  **Use `LatentEBM` and `LatentEBMLightningModule`**: Wrap the components and use the dedicated Lightning module for training. The data pipeline will automatically resize images to what the VAE expects.
+
+```python
+from diffusers import AutoencoderKL
+from ebm_lib.models.latent_ebm import LatentEBM
+from ebm_lib.latent_ebm_module import LatentEBMLightningModule
+
+# 1. Load the pre-trained Stable Diffusion VAE
+print("Loading pre-trained Stable Diffusion VAE...")
+vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-v1-4", subfolder="vae")
+
+# 2. Create a wrapper for the encoder
+class VAEEncoderWrapper(nn.Module):
+    def __init__(self, vae):
+        super().__init__()
+        self.vae = vae
+    def encode(self, x):
+        return self.vae.encode(x).latent_dist.mean
+
+encoder = VAEEncoderWrapper(vae).eval() # Use in eval mode
+
+# 3. Define an EBM for the latent space
+latent_dim = 4 * 64 * 64 # For a 512x512 image, latent is 4x64x64
+latent_energy_net = nn.Sequential(...)
+latent_ebm = LatentEBM(latent_energy_net, encoder)
+
+# 4. Use the dedicated Lightning Module
+latent_module = LatentEBMLightningModule(ebm_model=latent_ebm, ...)
+# The DataModule will need to be configured with image_size=512
+data_module = HeuristicPretrainingDataModule(image_size=512)
+trainer.fit(latent_module, datamodule=data_module)
+```
+
+## Saving and Loading Checkpoints
+
+The fine-tuning stage of the main workflow is configured to save checkpoints automatically into a directory named `ebm_checkpoints/`.
+
+To resume training from a specific checkpoint, you can use the `--ckpt_path` command-line argument:
+
+```bash
+python3 -m ebm_lib.main --ckpt_path ebm_checkpoints/lightning_logs/version_X/checkpoints/epoch=Y-step=Z.ckpt
+```

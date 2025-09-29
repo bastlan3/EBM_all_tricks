@@ -2,7 +2,8 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from copy import deepcopy
 
 from .ebm import EBM
 from .samplers.base_sampler import Sampler
@@ -18,54 +19,65 @@ class EBMLightningModule(pl.LightningModule):
                  sampler: Sampler,
                  optimizer_config: Dict[str, Any],
                  regularizers: List[Regularizer] = None,
-                 num_scales: int = 1):
+                 num_scales: int = 1,
+                 target_ebm_model: Optional[EBM] = None,
+                 ema_decay: Optional[float] = 0.999):
         """
         Args:
-            ebm_model (EBM): The energy-based model.
+            ebm_model (EBM): The "online" EBM, which is updated by the optimizer.
             sampler (Sampler): The MCMC sampler for generating negative samples.
-            optimizer_config (Dict[str, Any]): Configuration for the optimizer (e.g., {'name': 'Adam', 'lr': 1e-4}).
-            regularizers (List[Regularizer], optional): A list of regularizers to apply. Defaults to None.
+            optimizer_config (Dict[str, Any]): Configuration for the optimizer.
+            regularizers (List[Regularizer], optional): A list of regularizers.
+            num_scales (int): Number of scales for multi-scale energy calculation.
+            target_ebm_model (Optional[EBM]): An optional "target" EBM. If provided, EMA updates
+                                              will be used for stabilization.
+            ema_decay (float): The decay rate for the EMA of the target model.
         """
         super().__init__()
         self.ebm_model = ebm_model
+        self.target_ebm_model = target_ebm_model
         self.sampler = sampler
         self.optimizer_config = optimizer_config
         self.regularizers = nn.ModuleList(regularizers if regularizers is not None else [])
         self.num_scales = num_scales
+        self.ema_decay = ema_decay
+
+        if self.target_ebm_model is not None:
+            # Ensure target model parameters are not updated by the optimizer
+            self.target_ebm_model.requires_grad_(False)
 
         # This is important for PyTorch Lightning to track your model's parameters
         # and other hyperparameters, making saving and loading checkpoints robust.
-        self.save_hyperparameters(ignore=['ebm_model', 'sampler', 'regularizers'])
+        self.save_hyperparameters(ignore=['ebm_model', 'sampler', 'regularizers', 'target_ebm_model'])
 
-    def _calculate_multi_scale_energy(self, samples: torch.Tensor) -> torch.Tensor:
+    def _calculate_multi_scale_energy(self, samples: torch.Tensor, model: EBM) -> torch.Tensor:
         """
         Calculates the total energy of a batch of samples by summing the
-        energies over multiple resolutions of the samples.
+        energies over multiple resolutions of the samples, using the provided model.
         """
         total_energy = torch.zeros(samples.shape[0], device=samples.device)
 
         for scale in range(self.num_scales):
             if scale > 0:
-                # Downsample by a factor of 2 for each new scale
                 samples = F.avg_pool2d(samples, kernel_size=2)
-
-            # The EBM network must be able to handle variable input sizes
-            # if num_scales > 1. This is typically achieved with adaptive pooling.
-            total_energy += self.ebm_model(samples).squeeze()
+            total_energy += model(samples).squeeze()
 
         return total_energy
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        """
+        Hook to update the target model using EMA after each training batch, if a target model is provided.
+        """
+        if self.target_ebm_model is not None:
+            online_params = self.ebm_model.parameters()
+            target_params = self.target_ebm_model.parameters()
+
+            for p_online, p_target in zip(online_params, target_params):
+                p_target.data.copy_(self.ema_decay * p_target.data + (1.0 - self.ema_decay) * p_online.data)
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         """
         Performs a single training step.
-
-        Args:
-            batch (Any): The output from the DataLoader. Assumed to be a tensor of positive samples,
-                         or a list/tuple where the first element is the tensor of positive samples.
-            batch_idx (int): The index of the current batch.
-
-        Returns:
-            torch.Tensor: The total loss for this training step.
         """
         # 1. Unpack positive samples from the batch
         if isinstance(batch, (list, tuple)):
@@ -73,19 +85,23 @@ class EBMLightningModule(pl.LightningModule):
         else:
             positive_samples = batch
 
-        # Positive samples are automatically moved to the correct device by Lightning.
+        # Determine which model to use for sampling and negative energy calculation
+        model_for_sampling = self.target_ebm_model if self.target_ebm_model is not None else self.ebm_model
+        if self.target_ebm_model is not None:
+            self.target_ebm_model.to(self.device)
 
-        # 2. Generate negative samples using the sampler
-        # The sampler's `sample` method is responsible for creating tensors on the correct device.
+        # 2. Generate negative samples
+        progress = self.trainer.global_step / self.trainer.max_steps if self.trainer.max_steps else 0.0
         negative_samples = self.sampler.sample(
-            self.ebm_model,
+            model_for_sampling,
             n_samples=positive_samples.shape[0],
-            sample_shape=positive_samples.shape[1:]  # Pass the shape of an individual sample
+            sample_shape=positive_samples.shape[1:],
+            progress=progress
         )
 
         # 3. Calculate the core Contrastive Divergence (CD) loss
-        positive_energy = self._calculate_multi_scale_energy(positive_samples)
-        negative_energy = self._calculate_multi_scale_energy(negative_samples)
+        positive_energy = self._calculate_multi_scale_energy(positive_samples, self.ebm_model)
+        negative_energy = self._calculate_multi_scale_energy(negative_samples, model_for_sampling)
 
         cd_loss = positive_energy.mean() - negative_energy.mean()
         self.log('train_loss/cd_loss', cd_loss, on_step=True, on_epoch=True, prog_bar=True)
@@ -93,6 +109,7 @@ class EBMLightningModule(pl.LightningModule):
         total_loss = cd_loss
 
         # 4. Calculate and add regularization losses
+        # Regularizers should operate on the online model to affect the gradient update
         for reg in self.regularizers:
             reg_loss = reg.calculate_loss(self.ebm_model, positive_samples, negative_samples)
             # Use a descriptive name for logging, e.g., "L2EnergyRegularizer_loss"

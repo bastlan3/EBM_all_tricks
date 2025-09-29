@@ -11,7 +11,7 @@ class LangevinSampler(Sampler):
     gradient information from the EBM.
     """
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, noise_generator=None):
         """
         Initializes the LangevinSampler.
 
@@ -20,13 +20,16 @@ class LangevinSampler(Sampler):
                 - k_steps (int): The number of MCMC steps to run.
                 - step_size (float): The step size for the gradient update.
                 - noise_scale (float): The scale of the Gaussian noise to add at each step.
+            noise_generator (Optional[NoiseGenerator]): An optional noise generator for
+                                                         MCMC chain initialization.
         """
         super().__init__(config)
         self.k_steps = config.get('k_steps', 20)
         self.step_size = config.get('step_size', 0.1)
         self.noise_scale = config.get('noise_scale', 0.01)
+        self.noise_generator = noise_generator
 
-    def sample(self, ebm_model: EBM, n_samples: int, sample_shape: Tuple, initial_states: torch.Tensor = None) -> torch.Tensor:
+    def sample(self, ebm_model: EBM, n_samples: int, sample_shape: Tuple, initial_states: torch.Tensor = None, progress: float = 0.0) -> torch.Tensor:
         """
         Generates samples using Langevin Dynamics.
 
@@ -34,8 +37,8 @@ class LangevinSampler(Sampler):
             ebm_model (EBM): The Energy-Based Model to sample from.
             n_samples (int): The number of samples to generate.
             sample_shape (Tuple): The shape of a single sample (e.g., (channels, height, width)).
-            initial_states (torch.Tensor, optional): Starting points for the MCMC chains. If None,
-                                                     samples are initialized from a uniform distribution.
+            initial_states (torch.Tensor, optional): Starting points for the MCMC chains.
+            progress (float): The training progress (0.0 to 1.0), used for noise curriculum.
 
         Returns:
             torch.Tensor: The generated samples.
@@ -45,8 +48,14 @@ class LangevinSampler(Sampler):
 
         if initial_states is not None:
             samples = initial_states.to(device)
+        elif self.noise_generator is not None:
+            # Use the provided noise generator for initialization
+            # Note: The generator needs to be configured with the correct batch size
+            if self.noise_generator.batch_size != n_samples:
+                self.noise_generator.batch_size = n_samples
+            samples = self.noise_generator.generate_curriculum_noise(progress=progress)
         else:
-            # Initialize samples randomly from a uniform distribution over [-1, 1]
+            # Default to uniform noise if no generator is provided
             samples = torch.rand(n_samples, *sample_shape, device=device) * 2 - 1
 
         for _ in range(self.k_steps):

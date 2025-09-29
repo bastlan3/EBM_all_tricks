@@ -13,6 +13,8 @@ setup(
         'numpy',
         'scipy',
         'torchvision',
+        'diffusers',
+        'transformers',
     ],
     python_requires='>=3.8',
 )
